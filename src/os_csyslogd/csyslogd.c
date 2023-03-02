@@ -11,10 +11,135 @@
 #include "csyslogd.h"
 #include "os_net/os_net.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <libxml/parser.h>
+
+#include "cJSON.h"
+
 /* Global variables */
 char __shost[512];
 char __shost_long[512];
+char __vin[64];
+char __soft_version[VERSION_MAX_SIZE];
+char __strategy_version[VERSION_MAX_SIZE];
 
+enum sysinfo_e
+{
+	e_device_id = 0,
+	e_sysinfo_e_max
+};
+
+struct xmlItem_s
+{
+	char *name;
+	char content[64];
+};
+
+struct xmlItem_s nodeItem[e_sysinfo_e_max]=
+{
+	{"device_id",{0}},
+};
+
+void get_deviceId(const char *filename, char *const out)
+{
+	int i = 0;
+	xmlDocPtr doc;
+	xmlNodePtr curNode;
+	xmlChar *szKey;
+	doc = xmlReadFile(filename, "UTF-8", XML_PARSE_RECOVER);
+	if(doc == NULL)
+	{
+		return;
+	}
+	curNode = xmlDocGetRootElement(doc);
+	if(curNode == NULL)
+	{
+		fprintf(stderr, "error:empty document\n");
+		xmlFreeDoc(doc);
+		return;
+	}
+
+	if(xmlStrcmp(curNode->name, BAD_CAST"sysinfo"))
+	{
+		fprintf(stderr, "document of the wrong type, sysinfo node != sysinfo\n");
+		xmlFreeDoc(doc);
+		return;
+	}
+
+	curNode = curNode->xmlChildrenNode;
+	while(curNode != NULL)
+	{
+		for (i = 0; i < e_sysinfo_e_max; i++)
+		{
+
+			if(!xmlStrcmp(curNode->name, (const xmlChar *)nodeItem[i].name))
+			{
+			    szKey = xmlNodeGetContent(curNode);
+			    strcpy(nodeItem[i].content,(char*)szKey);
+			    printf("%s=%s\n", nodeItem[i].name, nodeItem[i].content);
+			    xmlFree(szKey);
+			}
+		}
+		curNode = curNode->next;
+	}
+	xmlFreeDoc(doc);
+    memcpy(out, nodeItem[e_device_id].content, strlen(nodeItem[e_device_id].content)+1);
+}
+
+int GetVersionInFile(const char *file, char *softVersion, char *strategyVersion)
+{
+    if (!file || !softVersion || !strategyVersion) {
+        merror("INFO: parameter error.");
+        return 0;
+    }
+
+    FILE *fp;
+    fp = fopen(file, "r");
+    if (!fp) {
+        merror("INFO: file open error: %s", file);
+        return 0;
+    }
+
+    if (fgets(softVersion, VERSION_MAX_SIZE, fp) != NULL) {
+        char* n = strchr(softVersion, '\n');
+        if (n) {
+            *n = '\0';
+        }
+    } else {
+        merror("INFO: softVersion error.");
+    }
+
+    if (fgets(strategyVersion, VERSION_MAX_SIZE, fp) != NULL) {
+        char* n = strchr(strategyVersion, '\n');
+        if (n) {
+            *n = '\0';
+        }
+    } else {
+        merror("INFO: strategyVersion error.");
+    }
+
+    fclose(fp);
+    return 1;
+}
+
+int GetPath(const char *file, char *path)
+{
+    if (!file || !path) {
+        return 0;
+    }
+    const char* first = strchr(file, '/');
+	const char* last = strrchr(file, '/');
+    if (!first || !last) {
+        return 0;
+	}
+    const char* version = "VERSION";
+    memcpy(path, first, last - first + 1);
+	memcpy(path + strlen(path), version, strlen(version) + 1);
+    return 1;
+}
 
 /* Monitor the alerts and send them via syslog
  * Only return in case of error
@@ -60,6 +185,39 @@ void OS_CSyslogD(SyslogConfig **syslog_config)
 
         s++;
     }
+    // while (syslog_config[s]) {
+    //     struct hostent *hostent = NULL;
+    //     hostent = gethostbyname(syslog_config[s]->server);
+    //     int i = 0;
+    //     while(hostent->h_addr_list[i] != NULL){
+    //         char *ipaddr = inet_ntoa(*((struct in_addr *)hostent->h_addr_list[i]));
+
+    //         syslog_config[s]->socket = OS_ConnectUDP(syslog_config[s]->port,
+    //                                                 ipaddr);
+    //         if (syslog_config[s]->socket < 0) {
+    //             merror(CONNS_ERROR, ARGV0, syslog_config[s]->server);
+    //             merror(CONNS_ERROR, ARGV0, ipaddr);
+    //         } else {
+    //             merror("%s: INFO: Forwarding alerts via syslog to: '%s:%s:%s'.",
+    //                 ARGV0, syslog_config[s]->server, ipaddr, syslog_config[s]->port);
+    //             break;
+    //         }
+    //         i++;
+    //     }
+    //     s++;
+    // }
+
+    /* Get VIN */
+    get_deviceId(VIN_FILE_PATH, __vin);
+    /* Get version */
+    int ret = GetVersionInFile(VERSION_FILE_PATH, __soft_version, __strategy_version);
+    if (ret) {
+        merror("%s: INFO: __soft_version: %s.", ARGV0, __soft_version);
+        merror("%s: INFO: __strategy_version: %s.", ARGV0, __strategy_version);
+    } else {
+        memcpy(__soft_version, "3.7.0", 6);
+        memcpy(__strategy_version, "1.0.0", 6);
+    }
 
     /* Infinite loop reading the alerts and inserting them */
     while (1) {
@@ -76,9 +234,15 @@ void OS_CSyslogD(SyslogConfig **syslog_config)
         s = 0;
         while (syslog_config[s]) {
             OS_Alert_SendSyslog(al_data, syslog_config[s]);
+
+            unsigned int sendFrequency = 0;
+            sendFrequency = syslog_config[s]->frequency;
+            if (sendFrequency != 0) {
+                sleep(sendFrequency);
+            }
+
             s++;
         }
-
         /* Clear the memory */
         FreeAlertData(al_data);
     }

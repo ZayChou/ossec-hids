@@ -152,12 +152,12 @@ int main(int argc, char **argv)
     }
 
     /* chroot */
-    if (Privsep_Chroot(dir) < 0) {
-        ErrorExit(CHROOT_ERROR, ARGV0, dir, errno, strerror(errno));
-    }
+    // if (Privsep_Chroot(dir) < 0) {
+    //     ErrorExit(CHROOT_ERROR, ARGV0, dir, errno, strerror(errno));
+    // }
 
     /* Now in chroot */
-    nowChroot();
+    //nowChroot();
 
     /* Change user */
     if (Privsep_SetUser(uid) < 0) {

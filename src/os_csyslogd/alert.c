@@ -203,15 +203,75 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         }
     }
 
+    /* Get GNSS infomation */
+    double gnssLong = 0.0;
+    double gnssLat = 0.0;
+    unsigned int sateNumber = 0;
+
+    FILE *f;
+    long len;
+    char *content;
+    cJSON *json = NULL;
+    f = fopen(GNSS_FILE_PATH, "r");
+    if (f) {
+        fseek(f, 0, SEEK_END);
+        len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        content = (char*)malloc(len + 1);
+        memset(content, 0, len + 1);
+        if (content) {
+            fread(content, 1, len, f);
+            fclose(f);
+
+            json = cJSON_Parse(content);
+            if (!json) {
+                merror("%s: Error: before: [%s].", "ossec-csyslogd", cJSON_GetErrorPtr());
+            } else {
+                const cJSON *cjsonLong = cJSON_GetObjectItemCaseSensitive(json, GNSS_LONG);
+                if (cJSON_IsNumber(cjsonLong)) {
+                    gnssLong = cJSON_GetObjectItem(json, GNSS_LONG)->valuedouble;
+                }
+                const cJSON *cjsonLat = cJSON_GetObjectItemCaseSensitive(json, GNSS_LAT);
+                if (cJSON_IsNumber(cjsonLat)) {
+                    gnssLat = cJSON_GetObjectItem(json, GNSS_LAT)->valuedouble;
+                }
+                const cJSON *cjsonSate = cJSON_GetObjectItemCaseSensitive(json, GNSS_SATE_NUMBER);
+                if (cJSON_IsNumber(cjsonSate)) {
+                    sateNumber = cJSON_GetObjectItem(json, GNSS_SATE_NUMBER)->valueint;
+                }
+            }
+            free(content);
+            if (json) {
+                cJSON_Delete(json);
+            } 
+        }
+    }
+
     /* Insert data */
     if (syslog_config->format == DEFAULT_CSYSLOG) {
+        int ret = 0;
+        char path[OS_SIZE_256] = {0};
+        char version[VERSION_MAX_SIZE] = {0};
+        char strategy[VERSION_MAX_SIZE] = {0};
+        if (al_data->rule == 541 || al_data->rule == 20100) {
+            ret = GetPath(al_data->location, path);
+        }
+        if (ret) {
+            ret = GetVersionInFile(path, version, strategy);
+        }
         /* Build syslog message */
         snprintf(syslog_msg, OS_SIZE_2048,
-                 "<%u>%s %s ossec: Alert Level: %u; Rule: %u - %s; Location: %s;",
+                 "<%u>%s %s ossec: Alert Level: %u; Rule: %u - %s; Location: %s; VIN: %s; Version: %s; Strategy: %s; Gnss: %f,%f,%d;",
                  syslog_config->priority, tstamp, hostname,
                  al_data->level,
                  al_data->rule, al_data->comment,
-                 al_data->location
+                 al_data->location,
+                 __vin,
+                 ret ? version : __soft_version,
+                 ret ? strategy : __strategy_version,
+                 gnssLong,
+                 gnssLat,
+                 sateNumber
                 );
         field_add_string(syslog_msg, OS_SIZE_2048, " classification: %s;", al_data->group);
         field_add_string(syslog_msg, OS_SIZE_2048, " srcip: %s;", al_data->srcip);
@@ -231,7 +291,7 @@ int OS_Alert_SendSyslog(alert_data *al_data, const SyslogConfig *syslog_config)
         field_add_string(syslog_msg, OS_SIZE_2048, " Group ownership: was %s;", al_data->group_chg);
         field_add_string(syslog_msg, OS_SIZE_2048, " Permissions changed: from %s;", al_data->perm_chg);
         /* "9/19/2016 - Sivakumar Nellurandi - parsing additions" */
-        field_add_truncated(syslog_msg, OS_SIZE_2048, " %s", logmsg, 2);
+        field_add_truncated(syslog_msg, OS_SIZE_2048, " LogMsg: %s", logmsg, 2);
     } else if (syslog_config->format == CEF_CSYSLOG) {
         /* Start with headers */
         snprintf(syslog_msg, OS_SIZE_2048,

@@ -13,6 +13,14 @@
 #include "config/csyslogd-config.h"
 
 #define OS_CSYSLOGD_MAX_TRIES 10
+#define VERSION_MAX_SIZE 12
+#define VIN_FILE_PATH "/sysinfo/sysinfo.xml"
+#define VERSION_FILE_PATH "/var/ossec/etc/VERSION"
+
+#define GNSS_FILE_PATH "/tmp/gnss_info"
+#define GNSS_LONG "long"
+#define GNSS_LAT "lat"
+#define GNSS_SATE_NUMBER "sateNumber"
 
 /** Prototypes **/
 
@@ -30,12 +38,17 @@ int field_add_int(char *dest, size_t size, const char *format, const int value )
 int field_add_string(char *dest, size_t size, const char *format, const char *value );
 int field_add_truncated(char *dest, size_t size, const char *format, const char *value,  int fmt_size );
 
+int GetVersionInFile(const char *file, char *softVersion, char *strategyVersion);
+int GetPath(const char *file, char *path);
 /** Global variables **/
 
 /* System hostname */
 extern char __shost[512];
 /* System hostname (full length) */
 extern char __shost_long[512];
-
+/* VIN */
+extern char __vin[64];
+extern char __soft_version[VERSION_MAX_SIZE];
+extern char __strategy_version[VERSION_MAX_SIZE];
 #endif /* _CSYSLOGD_H */
 
