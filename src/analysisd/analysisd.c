@@ -296,6 +296,17 @@ int main_analysisd(int argc, char **argv)
         ErrorExit(SETGID_ERROR, ARGV0, group, errno, strerror(errno));
     }
 
+    unsigned char appid_pub[32] = {0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,
+        0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01};
+    unsigned char appid_pri[32] = {0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,
+        0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02,0x02};
+    int ret = 0;
+
+    ret = cicvd_crypto_init(&ctx, appid_pri, appid_pub);
+    if (ret != 0) {
+        merror("INFO: cicvd_crypto_init error: %08X.", ret);
+    }
+
     /* Chroot */
     if (Privsep_Chroot(dir) < 0) {
         ErrorExit(CHROOT_ERROR, ARGV0, dir, errno, strerror(errno));
@@ -303,8 +314,6 @@ int main_analysisd(int argc, char **argv)
     nowChroot();
 
     Config.decoder_order_size = (size_t)getDefine_Int("analysisd", "decoder_order_size", 8, MAX_DECODER_ORDER_SIZE);
-
-
     /*
      * Anonymous Section: Load rules, decoders, and lists
      *
@@ -339,7 +348,7 @@ int main_analysisd(int argc, char **argv)
                 /* New loaded based on file speified in ossec.conf */
                 char **decodersfiles;
                 decodersfiles = Config.decoders;
-                while ( decodersfiles && *decodersfiles) {
+                while (decodersfiles && *decodersfiles) {
                     if (!test_config) {
                         verbose("%s: INFO: Reading decoder file %s.", ARGV0, *decodersfiles);
                     }
@@ -388,12 +397,24 @@ int main_analysisd(int argc, char **argv)
                 char **rulesfiles;
                 rulesfiles = Config.includes;
                 while (rulesfiles && *rulesfiles) {
+                    char tempName[256] = "head_";
                     if (!test_config) {
                         verbose("%s: INFO: Reading rules file: '%s'", ARGV0, *rulesfiles);
+                        if (strlen(*rulesfiles) > 250) {
+                            verbose("%s: INFO: Reading rules file: '%s' too lenth.", ARGV0, *rulesfiles);
+                            continue;
+                        }
+                        strncat(tempName, *rulesfiles, strlen(*rulesfiles));
                     }
-                    if (Rules_OP_ReadRules(*rulesfiles) < 0) {
+
+                    if (Rules_OP_ReadRules(tempName) < 0) {
                         ErrorExit(RULES_ERROR, ARGV0, *rulesfiles);
                     }
+                    
+                    int i = strlen(RULEPATH) + strlen(*rulesfiles) + 2 + strlen(tempName);
+                    char *tempRulepath = (char *)calloc(i, sizeof(char));
+                    snprintf(tempRulepath, i, "%s/%s", RULEPATH, tempName);
+                    remove(tempRulepath);
 
                     free(*rulesfiles);
                     rulesfiles++;

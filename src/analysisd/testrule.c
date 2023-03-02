@@ -27,14 +27,64 @@
 #include "analysisd.h"
 #include "fts.h"
 #include "cleanevent.h"
+#include <openssl/evp.h>
 
+#define ENCRYPTION 1
+#define DECRYPTION 0
 /** Internal Functions **/
 void OS_ReadMSG(char *ut_str);
 
 /* Analysisd function */
 RuleInfo *OS_CheckIfRuleMatch(Eventinfo *lf, RuleNode *curr_node);
 
+int do_crypt(FILE* in, FILE* out, int do_encrypt);
+
 void DecodeEvent(Eventinfo *lf);
+
+int do_crypt(FILE* in, FILE* out, int do_encrypt)
+{
+    /* Allow enough space in output buffer for additional block */
+    unsigned char inbuf[1024], outbuf[1024 + EVP_MAX_BLOCK_LENGTH];
+    int inlen, outlen;
+    EVP_CIPHER_CTX* ctx;
+    /*
+     * Bogus key and IV: we'd normally set these from
+     * another source.
+     */
+    unsigned char key[] = "0123456789abcdeF";
+    unsigned char iv[] = "1234567887654321";
+
+    /* Don't set key or IV right away; we want to check lengths */
+    ctx = EVP_CIPHER_CTX_new();
+    EVP_CipherInit_ex(ctx, EVP_aes_128_cbc(), NULL, NULL, NULL,
+        do_encrypt);
+    OPENSSL_assert(EVP_CIPHER_CTX_key_length(ctx) == 16);
+    OPENSSL_assert(EVP_CIPHER_CTX_iv_length(ctx) == 16);
+
+    /* Now we can set key and IV */
+    EVP_CipherInit_ex(ctx, NULL, NULL, key, iv, do_encrypt);
+
+    for (;;) {
+        inlen = fread(inbuf, 1, 1024, in);
+        if (inlen <= 0)
+            break;
+        if (!EVP_CipherUpdate(ctx, outbuf, &outlen, inbuf, inlen)) {
+            /* Error */
+            EVP_CIPHER_CTX_free(ctx);
+            return 0;
+        }
+        fwrite(outbuf, 1, outlen, out);
+    }
+    if (!EVP_CipherFinal_ex(ctx, outbuf, &outlen)) {
+        /* Error */
+        EVP_CIPHER_CTX_free(ctx);
+        return 0;
+    }
+    fwrite(outbuf, 1, outlen, out);
+
+    EVP_CIPHER_CTX_free(ctx);
+    return 1;
+}
 
 /* Print help statement */
 __attribute__((noreturn))
@@ -270,10 +320,51 @@ int main(int argc, char **argv)
                 rulesfiles = Config.includes;
                 while (rulesfiles && *rulesfiles) {
                     debug1("%s: INFO: Reading rules file: '%s'", ARGV0, *rulesfiles);
-                    if (Rules_OP_ReadRules(*rulesfiles) < 0) {
-                        ErrorExit(RULES_ERROR, ARGV0, *rulesfiles);
+                    char tempName[256] = "head_";
+
+                    if (strlen(*rulesfiles) > 250) {
+                        verbose("%s: INFO: Reading rules file: '%s' too lenth.", ARGV0, *rulesfiles);
+                        continue;
                     }
 
+                    strncat(tempName, *rulesfiles, strlen(*rulesfiles));
+                    verbose("%s: INFO: temp rules file: '%s'.", ARGV0, tempName);
+
+                    int i = strlen(RULEPATH) + strlen(*rulesfiles) + 2;
+                    char *rulepath = (char *)calloc(i, sizeof(char));
+                    if (!rulepath) {
+                        ErrorExit(MEM_ERROR, ARGV0, errno, strerror(errno));
+                    }
+                    snprintf(rulepath, i, "%s/%s", RULEPATH, *rulesfiles);
+                    // verbose("%s: INFO: full rules file: '%s'.", ARGV0, rulepath);
+
+                    i += strlen(tempName);
+                    char *tempRulepath = (char *)calloc(i, sizeof(char));
+                    if (!rulepath) {
+                        ErrorExit(MEM_ERROR, ARGV0, errno, strerror(errno));
+                    }
+                    snprintf(tempRulepath, i, "%s/%s", RULEPATH, tempName);
+                    // verbose("%s: INFO: temp full rules file: '%s'.", ARGV0, tempRulepath);
+                    FILE* fIn = fopen(rulepath, "rb");
+                    FILE* fOut = fopen(tempRulepath, "wb");
+                    if (!fIn) {
+                        ErrorExit(FOPEN_ERROR, ARGV0, *rulesfiles, errno, strerror(errno));
+                    }
+                    if (!fOut) {
+                        ErrorExit(FOPEN_ERROR, ARGV0, tempName, errno, strerror(errno));
+                    }
+                    int ret = do_crypt(fIn, fOut, DECRYPTION);
+                    if (!ret) {
+                        verbose("%s: INFO: do_crypt failed. %s", ARGV0, *rulesfiles);
+                    } else{
+                        verbose("%s: INFO: do_crypt succesed. %s", ARGV0, *rulesfiles);
+                    }
+                    fclose(fIn);
+                    fclose(fOut);
+                    if (Rules_OP_ReadRules(tempName) < 0) {
+                        ErrorExit(RULES_ERROR, ARGV0, *rulesfiles);
+                    }
+                    free(rulepath);
                     free(*rulesfiles);
                     rulesfiles++;
                 }

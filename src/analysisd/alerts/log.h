@@ -13,15 +13,19 @@
 #define __LOG_H
 
 #include "eventinfo.h"
+#include "cicvd_crypto.h"
 
 #define FWDROP "drop"
 #define FWALLOW "accept"
+#define RULE_PATH "/etc/notCryptionRule.conf"
 
 void OS_LogOutput(Eventinfo *lf);
 void OS_Log(Eventinfo *lf);
 void OS_CustomLog(const Eventinfo *lf, const char *format);
 void OS_Store(const Eventinfo *lf);
 int FW_Log(Eventinfo *lf);
+
+extern cicvd_crypto_context ctx;
 
 #endif
 

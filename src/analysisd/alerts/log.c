@@ -20,6 +20,8 @@
 static OSMatch FWDROPpm;
 static OSMatch FWALLOWpm;
 
+cicvd_crypto_context ctx;
+
 /* Allow custom alert output tokens */
 typedef enum e_custom_alert_tokens_id {
     CUSTOM_ALERT_TOKEN_TIMESTAMP = 0,
@@ -165,6 +167,42 @@ void OS_LogOutput(Eventinfo *lf)
     return;
 }
 
+
+unsigned int IsNeedeNcryption(int rule)
+{
+    return 0;
+    int ret = 1;
+    FILE *fp;
+    fp = fopen(RULE_PATH, "r");
+	if (fp) {
+        char buf[11] = {0};
+        while (fgets(buf, 10, fp) != NULL) {
+            /* Ignore blank lines and lines with a comment */
+            if (buf[0] == '\n' || buf[0] == '#') {
+                continue;
+            }
+            // verbose("INFO: Line data (%s).", buf);
+            char* n = strchr(buf, '\n');
+			if (n) {
+				*n = '\0';
+			}
+            if (!OS_StrIsNum(buf)) {
+                merror("INFO: file style is error: %s", RULE_PATH);
+            } else {
+                // merror("INFO: rule is: %d", rule);
+                // merror("INFO: config rule is: %d", atoi(buf));
+                if (atoi(buf) == rule) {
+                    ret = 0;
+                }
+            }
+        }
+        fclose(fp);
+    } else {
+        merror("INFO: file open error: %s", RULE_PATH);
+    }
+    return ret;
+}
+
 void OS_Log(Eventinfo *lf)
 {
 #ifdef LIBGEOIP_ENABLED
@@ -172,12 +210,53 @@ void OS_Log(Eventinfo *lf)
         if (lf->srcip && !lf->srcgeoip) {
             lf->srcgeoip = GetGeoInfobyIP(lf->srcip);
         }
+
+
         if (lf->dstip && !lf->dstgeoip) {
             lf->dstgeoip = GetGeoInfobyIP(lf->dstip);
         }
     }
 #endif
+    unsigned char *outbuf = NULL;
+    // merror("INFO: rule id is: %d.", lf->generated_rule->sigid);
+    // merror("INFO: lf->full_log is: %s.", lf->full_log);
+    if (IsNeedeNcryption(lf->generated_rule->sigid) == 1) {
+        int outlen = 0;
+        size_t len = strlen(lf->full_log);
+        int ret = 0;
+        ret = cicvd_crypto_log_enc(&ctx, lf->full_log, len, NULL, &outlen);
+        if (ret != 0)
+        {
+            merror("INFO: Encrypt log get outlen failed: %d.", ret);
+            return;
+        }
+        outbuf = malloc(outlen);
+        if (!outbuf) {
+            merror("INFO: Encrypt log get malloc error outlen is: %d.", outlen);
+            return;
+        }
+        ret = cicvd_crypto_log_enc(&ctx, lf->full_log, len, outbuf, &outlen);
+        if (ret != 0)
+        {
+            merror("INFO: Encrypt log failed: %d.", ret);
+            return;
+        } 
+        // merror("INFO: Encrypt log is: %s", outbuf);
+        unsigned char inbuf[1024] = {0};
+        int inlen = 1024;
+        ret = cicvd_crypto_log_dec(&ctx, outbuf, outlen, inbuf, &inlen);
+        // merror("INFO: Decrypt log: %s len:%d.", inbuf, inlen);
 
+        unsigned char key[32] = {0};
+        int keylen = 32;
+        ret = cicvd_crypto_get_key_neusoft(&ctx, &key, &keylen);
+        if (ret != 0)
+        {
+            merror("INFO: get key failed.");
+            return;
+        }
+        merror("INFO: key: %s. ", key);
+    }
     /* Writing to the alert log file */
     fprintf(_aflog,
             "** Alert %ld.%ld:%s - %s\n"
@@ -232,7 +311,7 @@ void OS_Log(Eventinfo *lf)
             lf->dstuser == NULL ? "" : "\nUser: ",
             lf->dstuser == NULL ? "" : lf->dstuser,
 
-            lf->full_log);
+            (IsNeedeNcryption(lf->generated_rule->sigid) == 0) ? lf->full_log : outbuf);
 
     /* Print the last events if present */
     if (lf->generated_rule->last_events) {
@@ -244,6 +323,7 @@ void OS_Log(Eventinfo *lf)
         lf->generated_rule->last_events[0] = NULL;
     }
 
+    free(outbuf);
     fprintf(_aflog, "\n");
     fflush(_aflog);
 
